@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from statsmodels.graphics.tsaplots import plot_acf
 import statsmodels.api as sm
 import numpy as np
+from statsmodels.tsa.stattools import adfuller 
 
 CPI_df = pd.read_excel("DATA/Aggregated data/CPI/CPI aggregated.xlsx", sheet_name=2, header=1)
 Exchange_rate_df = pd.read_excel("DATA/Aggregated data/Exchange rates/Exchange rates.xlsx", sheet_name=[0,1])
@@ -46,6 +47,9 @@ def seasonality_test(country, show_plot=True):
     print(f"{country} - Seasonality (month dummies) p-value: {pval:.6f}")
 
     return pval
+
+
+
 
 countries = ["Thailand", "Philippines", "Korea", "Indonesia"]
 
