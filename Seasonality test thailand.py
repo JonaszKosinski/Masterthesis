@@ -2,6 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from statsmodels.graphics.tsaplots import plot_acf
 import statsmodels.api as sm
+import numpy as np
 
 CPI_df = pd.read_excel("DATA/Aggregated data/CPI/CPI aggregated.xlsx", sheet_name=2, header=1)
 Exchange_rate_df = pd.read_excel("DATA/Aggregated data/Exchange rates/Exchange rates.xlsx", sheet_name=[0,1])
@@ -16,32 +17,37 @@ CPI_df["Date"] = CPI_df["Date"].astype(str).str.replace("-M", "-", regex=False)
 CPI_df["Date"] = pd.to_datetime(CPI_df["Date"], format="%Y-%m")
 CPI_df = CPI_df.set_index("Date").sort_index()
 
-# test 1, check for seasonality using ACF of inflation (Δlog(CPI)) and checking plots for significant spikes at seasonal lags (e.g., 12, 24, 36 months)
-country1 = "Thailand" 
-log_cpi = CPI_df[country1].dropna()
-infl = log_cpi.diff(1).dropna()
+def seasonality_test(country, show_plot=True):
 
-plot_acf(infl, lags=36)
-plt.title(f"ACF of monthly inflation (Δlog(CPI)) - {country1}")
-plt.show()
+    log_cpi = CPI_df[country].dropna()
+    infl = log_cpi.diff(1).dropna()
 
-# test for seasonality using month dummies, test 2
+    # --- Test 1: ACF plot ---
+    if show_plot:
+        plot_acf(infl, lags=36)
+        plt.title(f"ACF of monthly inflation (Δlog(CPI)) - {country}")
+        plt.show()
 
-month_dummies = pd.get_dummies(infl.index.month, drop_first=True)
-month_dummies.index = infl.index  # align index
+    # --- Test 2: Month dummies joint F-test ---
+    month_dummies = pd.get_dummies(infl.index.month, drop_first=True)
+    month_dummies.index = infl.index
+    month_dummies.columns = [f"m{c}" for c in month_dummies.columns]  # names like m2..m12
 
-# rename columns to valid names for statsmodels/patsy
-month_dummies.columns = [f"m{int(c):02d}" for c in month_dummies.columns]  # m02 ... m12
+    X = sm.add_constant(month_dummies).astype(float)
+    y = infl.astype(float)
 
-X = sm.add_constant(month_dummies).astype(float)
-y = infl.astype(float)
+    ols = sm.OLS(y, X).fit()
 
-ols = sm.OLS(y, X).fit()
+    # Joint test: all seasonal dummies = 0
+    terms = " = 0, ".join(month_dummies.columns) + " = 0"
+    f_test = ols.f_test(terms)
 
-# joint test: all month dummies = 0
-hypothesis = " = 0, ".join(month_dummies.columns) + " = 0"
-f_test = ols.f_test(hypothesis)
+    pval = float(f_test.pvalue)
+    print(f"{country} - Seasonality (month dummies) p-value: {pval:.6f}")
 
-print("Seasonality (month dummies) p-value:", float(f_test.pvalue))
-print("F-stat:", float(f_test.fvalue))
-print("p-value:", float(f_test.pvalue))
+    return pval
+
+countries = ["Thailand", "Philippines", "Korea", "Indonesia"]
+
+for c in countries:
+    seasonality_test(c, show_plot=True)
