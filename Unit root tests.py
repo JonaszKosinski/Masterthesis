@@ -12,7 +12,9 @@ Inernational_reserves_df = pd.read_excel("DATA/Aggregated data/International res
 Long_term_interest_rate_df = pd.read_excel("DATA/Aggregated data/Long term interest/Long term interest rate aggregated.xlsx", sheet_name=0)
 Short_term_interest_rate_df = pd.read_excel("DATA/Aggregated data/Short term interest/Short term 3 month interest rate aggregated.xlsx", sheet_name=0)
 
-
+# ============================
+# UNIT ROOT TEST: CPI
+# ============================
 
 # =========================
 # SETTINGS (edit if needed)
@@ -121,3 +123,116 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+# =========================
+# Exchange rates unit root tests
+# =========================
+
+# =========================
+# settings (edit if needed)
+# =========================
+EXR_PATH = "DATA/Aggregated data/Exchange rates/Exchange rates.xlsx"
+SHEET_NAME = 0      # change if needed (0 = first sheet) or use "Exchange rates"
+HEADER_ROW = 0      # change if your headers are not on the first row
+ALPHA = 0.05        # 5% level
+
+
+# =========================
+# HELPERS
+# =========================
+def find_date_column(df: pd.DataFrame) -> str:
+    """
+    Try to find the date column even if it's named weirdly.
+    """
+    cols = [str(c).strip() for c in df.columns]
+    df.columns = cols
+
+    # 1) Exact matches (case-insensitive)
+    for c in df.columns:
+        if str(c).strip().lower() == "date":
+            return c
+
+    # 2) Contains "date"
+    for c in df.columns:
+        if "date" in str(c).strip().lower():
+            return c
+
+    # 3) Fallback: first column (often the date)
+    return df.columns[0]
+
+
+def make_datetime_index(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = df.columns.map(lambda x: str(x).strip())
+
+    date_col = find_date_column(df)
+
+    # Convert to datetime
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=[date_col]).set_index(date_col).sort_index()
+
+    return df
+
+
+def clean_numeric_series(s: pd.Series) -> pd.Series:
+    """
+    Make sure the series is numeric (Excel sometimes imports as strings).
+    """
+    s = pd.to_numeric(s, errors="coerce")
+    s = s.replace([np.inf, -np.inf], np.nan).dropna()
+    return s
+
+
+def adf_result(series: pd.Series, name: str, autolag: str = "AIC") -> dict:
+    """
+    ADF test with constant only (regression='c') and autolag=AIC by default.
+    """
+    series = clean_numeric_series(series)
+    if len(series) < 20:
+        return {"Series": name, "n": len(series), "lags": np.nan, "ADF": np.nan, "p": np.nan, "Conclusion": "Too few obs"}
+
+    res = adfuller(series, regression="c", autolag=autolag)
+    adf_stat, pval, used_lags, nobs = res[0], res[1], res[2], res[3]
+
+    concl = "Stationary (reject unit root)" if pval < ALPHA else "Non-stationary (fail to reject)"
+    return {"Series": name, "n": nobs, "lags": used_lags, "ADF": adf_stat, "p": pval, "Conclusion": concl}
+
+
+# =========================
+# MAIN
+# =========================
+print("\n--- ADF TESTS FOR EXCHANGE RATES (constant only; autolag=AIC) ---\n")
+
+exr_df = pd.read_excel(EXR_PATH, sheet_name=SHEET_NAME, header=HEADER_ROW)
+exr_df = make_datetime_index(exr_df)
+
+# drop empty columns like "Unnamed: ..."
+exr_df = exr_df.loc[:, ~exr_df.columns.str.contains("^Unnamed", case=False, na=False)]
+
+countries = list(exr_df.columns)
+print(f"Series detected: {countries}\n")
+
+results = []
+
+for c in countries:
+    x = clean_numeric_series(exr_df[c])
+
+    # 1) level
+    results.append(adf_result(x, f"{c} | EXR level"))
+
+    # 2) Δlog(EXR)
+    # (replace <=0 with NaN so log works)
+    x_pos = x.where(x > 0)
+    dlog = np.log(x_pos).diff().dropna()
+    results.append(adf_result(dlog, f"{c} | Δlog(EXR)"))
+
+out = pd.DataFrame(results)
+
+# Pretty print
+pd.set_option("display.width", 200)
+pd.set_option("display.max_colwidth", 60)
+print(out.to_string(index=False, formatters={
+    "ADF": lambda v: f"{v:.4f}" if pd.notna(v) else "NA",
+    "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
+}))
+print()
