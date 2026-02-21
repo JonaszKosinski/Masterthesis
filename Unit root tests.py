@@ -312,3 +312,40 @@ print(out.to_string(index=False, formatters={
     "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
 }))
 print()
+
+# =========================
+# SHORT TERM INTEREST RATE — UNIT ROOT
+# =========================
+
+print("\n--- ADF TESTS FOR SHORT-TERM INTEREST RATES (constant only; autolag=AIC) ---\n")
+
+STR_PATH = "DATA/Aggregated data/Short term interest/Short term 3 month interest rate aggregated.xlsx"
+
+str_df = pd.read_excel(STR_PATH, sheet_name=0, header=0)
+str_df = make_datetime_index(str_df)
+
+# Drop Excel column E (5th column)
+if str_df.shape[1] >= 5:
+    str_df = str_df.drop(columns=[str_df.columns[4]])
+
+# Drop unnamed junk
+str_df = str_df.loc[:, ~str_df.columns.str.contains("^Unnamed", case=False, na=False)]
+
+print("Series detected (after dropping E):", list(str_df.columns), "\n")
+
+str_results = []
+
+for c in str_df.columns:
+    x = clean_numeric_series(str_df[c])
+
+    str_results.append(adf_result(x, f"{c} | ST rate level"))
+    dx = x.diff().dropna()
+    str_results.append(adf_result(dx, f"{c} | ΔST rate"))
+
+out_str = pd.DataFrame(str_results)
+
+print(out_str.to_string(index=False, formatters={
+    "ADF": lambda v: f"{v:.4f}" if pd.notna(v) else "NA",
+    "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
+}))
+print()
