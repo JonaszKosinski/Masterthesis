@@ -349,3 +349,51 @@ print(out_str.to_string(index=False, formatters={
     "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
 }))
 print()
+
+# =========================
+# M2 — UNIT ROOT TESTS
+# =========================
+
+print("\n--- ADF TESTS FOR M2 (constant only; autolag=AIC) ---\n")
+
+M2_PATH = "DATA/Aggregated data/M2/M2 aggregated.xlsx"
+
+# load
+m2_df = pd.read_excel(M2_PATH, sheet_name=1, header=0)
+
+# clean column names
+m2_df.columns = m2_df.columns.map(lambda x: str(x).strip())
+
+# fix date format like 2015-M01
+date_col = find_date_column(m2_df)
+m2_df[date_col] = m2_df[date_col].astype(str).str.replace("-M", "-", regex=False)
+m2_df[date_col] = pd.to_datetime(m2_df[date_col], format="%Y-%m", errors="coerce")
+
+m2_df = m2_df.dropna(subset=[date_col]).set_index(date_col).sort_index()
+
+# drop empty columns
+m2_df = m2_df.loc[:, ~m2_df.columns.str.contains("^Unnamed", case=False, na=False)]
+
+countries = list(m2_df.columns)
+print(f"Series detected: {countries}\n")
+
+results = []
+
+for c in countries:
+    x = clean_numeric_series(m2_df[c])
+
+    # 1) level
+    results.append(adf_result(x, f"{c} | M2 level"))
+
+    # 2) Δlog(M2)
+    x_pos = x.where(x > 0)
+    dlog = np.log(x_pos).diff().dropna()
+    results.append(adf_result(dlog, f"{c} | Δlog(M2)"))
+
+out = pd.DataFrame(results)
+
+print(out.to_string(index=False, formatters={
+    "ADF": lambda v: f"{v:.4f}" if pd.notna(v) else "NA",
+    "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
+}))
+print()
