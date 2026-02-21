@@ -236,3 +236,43 @@ print(out.to_string(index=False, formatters={
     "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
 }))
 print()
+
+# =========================
+# International reserves unit root tests
+# =========================
+
+RES_PATH = "DATA/Aggregated data/International reserves/International reserves aggregated.xlsx"
+SHEET_NAME = 1      # your base index sheet
+HEADER_ROW = 0
+
+print("\n--- ADF TESTS FOR INTERNATIONAL RESERVES (constant only; autolag=AIC) ---\n")
+
+res_df = pd.read_excel(RES_PATH, sheet_name=SHEET_NAME, header=HEADER_ROW)
+res_df = make_datetime_index(res_df)
+
+# drop unnamed columns
+res_df = res_df.loc[:, ~res_df.columns.str.contains("^Unnamed", case=False, na=False)]
+
+countries = list(res_df.columns)
+print(f"Series detected: {countries}\n")
+
+results = []
+
+for c in countries:
+    x = clean_numeric_series(res_df[c])
+
+    # 1) level
+    results.append(adf_result(x, f"{c} | Reserves level"))
+
+    # 2) Δlog(reserves)
+    x_pos = x.where(x > 0)
+    dlog = np.log(x_pos).diff().dropna()
+    results.append(adf_result(dlog, f"{c} | Δlog(Reserves)"))
+
+out = pd.DataFrame(results)
+
+print(out.to_string(index=False, formatters={
+    "ADF": lambda v: f"{v:.4f}" if pd.notna(v) else "NA",
+    "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
+}))
+print()
