@@ -276,3 +276,39 @@ print(out.to_string(index=False, formatters={
     "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
 }))
 print()
+
+# =========================
+# LONG TERM INTEREST RATE — UNIT ROOT
+# =========================
+
+print("\n--- ADF TESTS FOR LONG-TERM INTEREST RATES (constant only; autolag=AIC) ---\n")
+
+LTR_PATH = "DATA/Aggregated data/Long term interest/Long term interest rate aggregated.xlsx"
+
+ltr_df = pd.read_excel(LTR_PATH, sheet_name=0, header=0)
+ltr_df = make_datetime_index(ltr_df)
+
+ltr_df = ltr_df.loc[:, ~ltr_df.columns.str.contains("^Unnamed", case=False, na=False)]
+
+countries = list(ltr_df.columns)
+print(f"Series detected: {countries}\n")
+
+results = []
+
+for c in countries:
+    x = clean_numeric_series(ltr_df[c])
+
+    # 1) level
+    results.append(adf_result(x, f"{c} | LT rate level"))
+
+    # 2) first difference
+    dx = x.diff().dropna()
+    results.append(adf_result(dx, f"{c} | ΔLT rate"))
+
+out = pd.DataFrame(results)
+
+print(out.to_string(index=False, formatters={
+    "ADF": lambda v: f"{v:.4f}" if pd.notna(v) else "NA",
+    "p":   lambda v: f"{v:.6f}" if pd.notna(v) else "NA",
+}))
+print()
