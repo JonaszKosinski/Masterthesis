@@ -3,55 +3,56 @@ import matplotlib.pyplot as plt
 from statsmodels.graphics.tsaplots import plot_acf
 import statsmodels.api as sm
 import numpy as np
-from statsmodels.tsa.stattools import adfuller 
 
+# ========= LOAD CPI (already log(CPI) in your file) =========
 CPI_df = pd.read_excel("DATA/Aggregated data/CPI/CPI aggregated.xlsx", sheet_name=2, header=1)
-Exchange_rate_df = pd.read_excel("DATA/Aggregated data/Exchange rates/Exchange rates.xlsx", sheet_name=[0,1])
-Expected_inflation_df = pd.read_excel("DATA/Aggregated data/Expected inflation/Expected inflation aggregated.xlsx", sheet_name=0)
-Inernational_reserves_df = pd.read_excel("DATA/Aggregated data/International reserves/International reserves aggregated.xlsx", sheet_name=1)
-Long_term_interest_rate_df = pd.read_excel("DATA/Aggregated data/Long term interest/Long term interest rate aggregated.xlsx", sheet_name=0)
-Short_term_interest_rate_df = pd.read_excel("DATA/Aggregated data/Short term interest/Short term 3 month interest rate aggregated.xlsx", sheet_name=0)
-
 CPI_df.columns = CPI_df.columns.map(lambda x: str(x).strip())
-
 CPI_df["Date"] = CPI_df["Date"].astype(str).str.replace("-M", "-", regex=False)
 CPI_df["Date"] = pd.to_datetime(CPI_df["Date"], format="%Y-%m")
 CPI_df = CPI_df.set_index("Date").sort_index()
 
-def seasonality_test(country, show_plot=True):
+# ========= LOAD EXCHANGE RATES (LEVELS sheet) =========
+EXR_PATH = "DATA/Aggregated data/Exchange rates/Exchange rates.xlsx"
+EXR_df = pd.read_excel(EXR_PATH, sheet_name=0, header=0)  # levels sheet
+EXR_df.columns = EXR_df.columns.map(lambda x: str(x).strip())
+# robust date parsing (your file shows 2015-01-01 already)
+date_col = "Date" if "Date" in EXR_df.columns else EXR_df.columns[0]
+EXR_df[date_col] = pd.to_datetime(EXR_df[date_col], errors="coerce")
+EXR_df = EXR_df.dropna(subset=[date_col]).set_index(date_col).sort_index()
 
-    log_cpi = CPI_df[country].dropna()
-    infl = log_cpi.diff(1).dropna()
+def seasonality_f_test(series: pd.Series, title: str, show_plot=True, lags=36):
+    """ACF + monthly dummy joint F-test on the provided series."""
+    s = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
 
-    # --- Test 1: ACF plot ---
     if show_plot:
-        plot_acf(infl, lags=36)
-        plt.title(f"ACF of monthly inflation (Δlog(CPI)) - {country}")
+        plot_acf(s, lags=lags)
+        plt.title(title)
         plt.show()
 
-    # --- Test 2: Month dummies joint F-test ---
-    month_dummies = pd.get_dummies(infl.index.month, drop_first=True)
-    month_dummies.index = infl.index
-    month_dummies.columns = [f"m{c}" for c in month_dummies.columns]  # names like m2..m12
+    month_dummies = pd.get_dummies(s.index.month, drop_first=True)
+    month_dummies.index = s.index
+    month_dummies.columns = [f"m{c}" for c in month_dummies.columns]
 
     X = sm.add_constant(month_dummies).astype(float)
-    y = infl.astype(float)
+    y = s.astype(float)
 
     ols = sm.OLS(y, X).fit()
 
-    # Joint test: all seasonal dummies = 0
     terms = " = 0, ".join(month_dummies.columns) + " = 0"
-    f_test = ols.f_test(terms)
-
-    pval = float(f_test.pvalue)
-    print(f"{country} - Seasonality (month dummies) p-value: {pval:.6f}")
-
+    pval = float(ols.f_test(terms).pvalue)
     return pval
-
-
-
 
 countries = ["Thailand", "Philippines", "Korea", "Indonesia"]
 
+print("\n=== CPI seasonality on inflation: Δlog(CPI) (your CPI is already logged) ===")
 for c in countries:
-    seasonality_test(c, show_plot=True)
+    infl = pd.to_numeric(CPI_df[c], errors="coerce").diff().dropna()  # Δlog(CPI)
+    p = seasonality_f_test(infl, f"ACF of inflation Δlog(CPI) - {c}", show_plot=True)
+    print(f"{c} - CPI inflation seasonality p-value: {p:.6f}")
+
+print("\n=== EXR seasonality on depreciation: Δlog(EXR) ===")
+for c in countries:
+    exr_level = pd.to_numeric(EXR_df[c], errors="coerce")
+    dlog_exr = np.log(exr_level.where(exr_level > 0)).diff().dropna()  # Δlog(EXR)
+    p = seasonality_f_test(dlog_exr, f"ACF of Δlog(EXR) - {c}", show_plot=True)
+    print(f"{c} - EXR Δlog seasonality p-value: {p:.6f}")
