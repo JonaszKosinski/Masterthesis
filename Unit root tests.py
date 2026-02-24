@@ -107,7 +107,7 @@ def main():
 
         # 2) Δlog(CPI)
         cpi_num = pd.to_numeric(cpi, errors="coerce")
-        dlog_cpi = np.log(cpi_num).diff()  # diff(log(CPI))
+        dlog_cpi = cpi_num.diff() # diff(log(CPI))
         results.append(adf_test(dlog_cpi, f"{country} | Δlog(CPI)"))
 
     out = pd.DataFrame(results)
@@ -222,8 +222,7 @@ for c in countries:
 
     # 2) Δlog(EXR)
     # (replace <=0 with NaN so log works)
-    x_pos = x.where(x > 0)
-    dlog = np.log(x_pos).diff().dropna()
+    dlog = x.diff().dropna()
     results.append(adf_result(dlog, f"{c} | Δlog(EXR)"))
 
 out = pd.DataFrame(results)
