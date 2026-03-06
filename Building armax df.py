@@ -26,7 +26,7 @@ OUT_MASTER = "DATA/Processed/armax_master_dataframe.xlsx"
 # ============================================================
 def read_processed_excel(path: str) -> pd.DataFrame:
     """
-    Reads your processed SA files which look like:
+    Reads processed SA files which look like:
     col1 = Dates, then country columns.
     """
     df = pd.read_excel(path, sheet_name=0)
