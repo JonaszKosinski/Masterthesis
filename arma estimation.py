@@ -15,7 +15,7 @@ OUT_PATH = "DATA/Processed/arma_baseline_results.xlsx"
 
 COUNTRIES = ["Thailand", "Philippines", "Korea", "Indonesia"]
 
-# Models based on your lag test
+# Models based on lag test
 MODEL_SPEC = {
     "Thailand": (1, 0, 0),      # AR(1)
     "Philippines": (1, 0, 1),   # ARMA(1,1)
