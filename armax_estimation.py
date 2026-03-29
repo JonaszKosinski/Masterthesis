@@ -1,9 +1,17 @@
 import warnings
+import os
+
+import matplotlib
+matplotlib.use("Agg")   # avoids VS Code/backend plotting issues
+
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.stats.diagnostic import acorr_ljungbox
+from statsmodels.graphics.tsaplots import plot_acf
+from statsmodels.graphics.gofplots import qqplot
 
 # ============================================================
 # SUPPRESS WARNINGS
@@ -21,19 +29,16 @@ COUNTRIES = ["Thailand", "Philippines", "Korea", "Indonesia"]
 
 # ----------------------------------------------------------------
 # BASELINE ARMA STRUCTURE
-# These should come from your inflation ACF/PACF inspection,
-# and/or low-order candidate testing.
 # ----------------------------------------------------------------
 MODEL_SPEC = {
-    "Thailand": (1, 0, 1),      # ARIMA(p,d,q) with d=0 after transformation
+    "Thailand": (1, 0, 1),
     "Philippines": (1, 0, 1),
     "Korea": (1, 0, 0),
-    "Indonesia": (1, 0, 1)
+    "Indonesia": (2, 0, 1)
 }
 
 # ----------------------------------------------------------------
 # Exogenous variable suffixes
-# If columns are Thailand_dlog_m2, Thailand_dlog_exr, ...
 # ----------------------------------------------------------------
 EXOG_SUFFIXES = [
     "dlog_m2",
@@ -45,11 +50,7 @@ EXOG_SUFFIXES = [
 
 MAX_LAG = 6
 SIGNIFICANCE_LEVEL = 0.10
-
-# Keep ARMA structure fixed while pruning exogenous regressors
 REMOVE_ONLY_EXOG = True
-
-# Optional minimum number of exogenous terms to keep
 MIN_EXOG_TERMS = 0
 
 # ============================================================
@@ -165,7 +166,6 @@ def prune_insignificant_exog(
         res = fit_armax(y, current_X, order, country, verbose=True)
         pvalues = res.pvalues.copy()
 
-        # Terms we protect from removal
         protected_terms = {"const", "sigma2"}
 
         if remove_only_exog:
@@ -178,24 +178,20 @@ def prune_insignificant_exog(
             errors="ignore"
         )
 
-        # Keep only terms that are in the current exog matrix
         if current_X.shape[1] > 0:
             candidate_pvals = candidate_pvals[candidate_pvals.index.isin(current_X.columns)]
         else:
             candidate_pvals = pd.Series(dtype=float)
 
-        # No removable exogenous terms left
         if candidate_pvals.empty:
             return res, current_X, removed_terms
 
         worst_term = candidate_pvals.idxmax()
         worst_p = candidate_pvals.max()
 
-        # Stop if all remaining exogenous terms are significant enough
         if worst_p <= alpha:
             return res, current_X, removed_terms
 
-        # Stop if removing one more term would violate minimum exog count
         if current_X.shape[1] <= min_exog_terms:
             return res, current_X, removed_terms
 
@@ -204,7 +200,6 @@ def prune_insignificant_exog(
 
         print(f"[{country}] Removing: {worst_term} (p-value = {worst_p:.4f})")
 
-        # If everything gets removed, fit pure ARMA
         if current_X.shape[1] == 0:
             print(f"[{country}] All exogenous terms removed. Refitting pure ARIMA({order[0]},{order[1]},{order[2]}).")
             res = fit_armax(y, None, order, country, verbose=True)
@@ -280,6 +275,108 @@ def extract_coefficients(country: str, res):
     return rows
 
 # ============================================================
+# SAVE RESIDUALS TO EXCEL
+# ============================================================
+def save_residuals_to_excel(res, country: str, out_dir: str = "DATA/Processed/residual_diagnostics"):
+    os.makedirs(out_dir, exist_ok=True)
+
+    resid = pd.Series(res.resid).dropna()
+    out = pd.DataFrame({
+        "date": resid.index,
+        "residual": resid.values,
+        "squared_residual": resid.values ** 2
+    })
+
+    save_path = os.path.join(out_dir, f"{country}_residuals.xlsx")
+    out.to_excel(save_path, index=False)
+    print(f"Saved residuals to: {save_path}")
+
+# ============================================================
+# PLOT RESIDUAL DIAGNOSTICS
+# ============================================================
+def plot_residual_diagnostics(res, country: str, out_dir: str = "DATA/Processed/residual_diagnostics"):
+    os.makedirs(out_dir, exist_ok=True)
+
+    resid = pd.Series(res.resid).dropna()
+
+    if len(resid) < 5:
+        print(f"Not enough residual observations to plot diagnostics for {country}.")
+        return
+
+    # -------- Combined 2x2 diagnostics figure --------
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+
+    # Residuals over time
+    axes[0, 0].plot(resid.index, resid.values)
+    axes[0, 0].axhline(0, linestyle="--")
+    axes[0, 0].set_title(f"{country}: residuals over time")
+    axes[0, 0].set_xlabel("Date")
+    axes[0, 0].set_ylabel("Residual")
+
+    # Residual ACF
+    max_acf_lag = min(24, max(1, len(resid) // 2 - 1))
+    plot_acf(resid, lags=max_acf_lag, ax=axes[0, 1])
+    axes[0, 1].set_title(f"{country}: residual ACF")
+
+    # Histogram
+    axes[1, 0].hist(resid, bins=20)
+    axes[1, 0].set_title(f"{country}: residual histogram")
+    axes[1, 0].set_xlabel("Residual")
+    axes[1, 0].set_ylabel("Frequency")
+
+    # Squared residuals
+    axes[1, 1].plot(resid.index, resid.values ** 2)
+    axes[1, 1].set_title(f"{country}: squared residuals over time")
+    axes[1, 1].set_xlabel("Date")
+    axes[1, 1].set_ylabel("Residual squared")
+
+    plt.tight_layout()
+    combined_path = os.path.join(out_dir, f"{country}_residual_diagnostics.png")
+    plt.savefig(combined_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved combined residual diagnostics plot to: {combined_path}")
+
+    # -------- Separate residual line plot --------
+    plt.figure(figsize=(12, 5))
+    plt.plot(resid.index, resid.values)
+    plt.axhline(0, linestyle="--")
+    plt.title(f"{country}: residuals over time")
+    plt.xlabel("Date")
+    plt.ylabel("Residual")
+    plt.tight_layout()
+    resid_line_path = os.path.join(out_dir, f"{country}_residuals_over_time.png")
+    plt.savefig(resid_line_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved residual time plot to: {resid_line_path}")
+
+    # -------- Separate residual ACF --------
+    plt.figure(figsize=(8, 5))
+    ax = plt.gca()
+    plot_acf(resid, lags=max_acf_lag, ax=ax)
+    plt.title(f"{country}: residual ACF")
+    plt.tight_layout()
+    acf_path = os.path.join(out_dir, f"{country}_residual_acf.png")
+    plt.savefig(acf_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved residual ACF plot to: {acf_path}")
+
+    # -------- Separate Q-Q plot --------
+    std_resid = (resid - resid.mean()) / resid.std(ddof=1)
+
+    plt.figure(figsize=(6, 6))
+    qqplot(std_resid, line="s", ax=plt.gca())
+    plt.title(f"{country}: residual Q-Q plot")
+    plt.tight_layout()
+    qq_path = os.path.join(out_dir, f"{country}_residual_qqplot.png")
+    plt.savefig(qq_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved Q-Q plot to: {qq_path}")
+
+# ============================================================
 # MAIN
 # ============================================================
 def main():
@@ -314,6 +411,17 @@ def main():
             coef_rows.extend(
                 extract_coefficients(country, final_res)
             )
+
+            # Export residual diagnostics for Indonesia
+            if country == "Indonesia":
+                save_residuals_to_excel(final_res, country)
+                plot_residual_diagnostics(final_res, country)
+
+                # Optional: print residual autocorrelations numerically
+                resid = pd.Series(final_res.resid).dropna()
+                print("\nIndonesia residual autocorrelations:")
+                for lag in range(1, min(13, len(resid))):
+                    print(f"Lag {lag}: {resid.autocorr(lag=lag):.4f}")
 
         except Exception as e:
             print(f"[ERROR] {country}: {e}")
