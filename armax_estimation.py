@@ -28,7 +28,7 @@ OUT_PATH_COEFS = "DATA/Processed/armax_selected_coefficients.xlsx"
 COUNTRIES = ["Thailand", "Philippines", "Korea", "Indonesia"]
 
 # ----------------------------------------------------------------
-# BASELINE ARMA STRUCTURE
+# FINAL ARMAX STRUCTURE
 # ----------------------------------------------------------------
 MODEL_SPEC = {
     "Thailand": (1, 0, 1),
@@ -52,6 +52,15 @@ MAX_LAG = 6
 SIGNIFICANCE_LEVEL = 0.10
 REMOVE_ONLY_EXOG = True
 MIN_EXOG_TERMS = 0
+
+# ----------------------------------------------------------------
+# AUTOMATIC OUTLIER DUMMIES
+# Thailand only
+# ----------------------------------------------------------------
+AUTO_OUTLIER_DUMMIES = True
+OUTLIER_COUNTRIES = ["Thailand"]
+OUTLIER_Z_THRESHOLD = 3.0
+MAX_OUTLIER_DUMMIES = 3
 
 # ============================================================
 # LOAD DATA
@@ -133,7 +142,7 @@ def fit_armax(y: pd.Series, X: pd.DataFrame | None, order: tuple, country: str, 
         trend="c"
     )
 
-    result = model.fit(method_kwargs={"maxiter": 500})
+    result = model.fit(method_kwargs={"maxiter": 1000})
 
     if verbose:
         print("\n" + "=" * 70)
@@ -206,6 +215,106 @@ def prune_insignificant_exog(
             return res, pd.DataFrame(index=y.index), removed_terms
 
 # ============================================================
+# OUTLIER DETECTION AND DUMMY CREATION
+# ============================================================
+def detect_outlier_dates_from_residuals(
+    res,
+    threshold: float = 3.0,
+    max_dummies: int = 3
+):
+    resid = pd.Series(res.resid).dropna()
+
+    if len(resid) < 10:
+        return []
+
+    std_resid = (resid - resid.mean()) / resid.std(ddof=1)
+    candidates = std_resid[std_resid.abs() > threshold]
+
+    if candidates.empty:
+        return []
+
+    # strongest outliers first
+    candidates = candidates.reindex(candidates.abs().sort_values(ascending=False).index)
+    selected_dates = list(candidates.index[:max_dummies])
+
+    print("\nDetected outlier dates based on standardized residuals:")
+    for dt in selected_dates:
+        print(f"  {dt.strftime('%Y-%m-%d')} | z = {std_resid.loc[dt]:.3f} | resid = {resid.loc[dt]:.6f}")
+
+    return selected_dates
+
+def build_outlier_dummies(index: pd.DatetimeIndex, outlier_dates: list, prefix: str = "outlier") -> pd.DataFrame:
+    dummies = []
+
+    for i, dt in enumerate(outlier_dates, start=1):
+        s = pd.Series(0.0, index=index)
+        if dt in s.index:
+            s.loc[dt] = 1.0
+        s.name = f"{prefix}_{i}"
+        dummies.append(s)
+
+    if not dummies:
+        return pd.DataFrame(index=index)
+
+    return pd.concat(dummies, axis=1)
+
+def refit_with_outlier_dummies(
+    y: pd.Series,
+    X: pd.DataFrame,
+    order: tuple,
+    country: str,
+    alpha: float,
+    remove_only_exog: bool,
+    min_exog_terms: int,
+    threshold: float = 3.0,
+    max_dummies: int = 3
+):
+    # Initial fit
+    initial_res, initial_X, initial_removed = prune_insignificant_exog(
+        y=y,
+        X=X,
+        order=order,
+        country=country,
+        alpha=alpha,
+        remove_only_exog=remove_only_exog,
+        min_exog_terms=min_exog_terms
+    )
+
+    # Detect outliers from initial residuals
+    outlier_dates = detect_outlier_dates_from_residuals(
+        initial_res,
+        threshold=threshold,
+        max_dummies=max_dummies
+    )
+
+    if not outlier_dates:
+        print(f"\n[{country}] No outliers detected above |z| > {threshold}.")
+        return initial_res, initial_X, initial_removed, []
+
+    # Build dummies and append them to original X
+    dummy_df = build_outlier_dummies(
+        index=y.index,
+        outlier_dates=outlier_dates,
+        prefix=f"{country.lower()}_outlier"
+    )
+
+    X_augmented = pd.concat([X, dummy_df], axis=1)
+
+    print(f"\n[{country}] Refitting with {dummy_df.shape[1]} outlier dummy variable(s)...")
+
+    final_res, final_X, final_removed = prune_insignificant_exog(
+        y=y,
+        X=X_augmented,
+        order=order,
+        country=country,
+        alpha=alpha,
+        remove_only_exog=remove_only_exog,
+        min_exog_terms=min_exog_terms
+    )
+
+    return final_res, final_X, final_removed, outlier_dates
+
+# ============================================================
 # DIAGNOSTICS
 # ============================================================
 def compute_diagnostics(res):
@@ -233,7 +342,14 @@ def compute_diagnostics(res):
 # ============================================================
 # EXTRACT RESULTS
 # ============================================================
-def extract_model_summary(country: str, order: tuple, res, selected_X: pd.DataFrame, removed_terms: list):
+def extract_model_summary(
+    country: str,
+    order: tuple,
+    res,
+    selected_X: pd.DataFrame,
+    removed_terms: list,
+    outlier_dates_used: list | None = None
+):
     p, d, q = order
     diag = compute_diagnostics(res)
 
@@ -244,6 +360,7 @@ def extract_model_summary(country: str, order: tuple, res, selected_X: pd.DataFr
         "n_selected_exog": int(selected_X.shape[1]),
         "selected_exog_terms": ", ".join(selected_X.columns.tolist()) if selected_X.shape[1] > 0 else "",
         "removed_terms": ", ".join([f"{name} (p={pv:.3f})" for name, pv in removed_terms]) if removed_terms else "",
+        "outlier_dates": ", ".join([dt.strftime("%Y-%m-%d") for dt in outlier_dates_used]) if outlier_dates_used else "",
         "const": res.params.get("const", np.nan),
         "aic": res.aic,
         "bic": res.bic,
@@ -393,35 +510,50 @@ def main():
         try:
             y, X = build_country_dataset(master, country, EXOG_SUFFIXES, MAX_LAG)
             order = MODEL_SPEC[country]
+            outlier_dates_used = []
 
-            final_res, selected_X, removed_terms = prune_insignificant_exog(
-                y=y,
-                X=X,
-                order=order,
-                country=country,
-                alpha=SIGNIFICANCE_LEVEL,
-                remove_only_exog=REMOVE_ONLY_EXOG,
-                min_exog_terms=MIN_EXOG_TERMS
-            )
+            if AUTO_OUTLIER_DUMMIES and country in OUTLIER_COUNTRIES:
+                final_res, selected_X, removed_terms, outlier_dates_used = refit_with_outlier_dummies(
+                    y=y,
+                    X=X,
+                    order=order,
+                    country=country,
+                    alpha=SIGNIFICANCE_LEVEL,
+                    remove_only_exog=REMOVE_ONLY_EXOG,
+                    min_exog_terms=MIN_EXOG_TERMS,
+                    threshold=OUTLIER_Z_THRESHOLD,
+                    max_dummies=MAX_OUTLIER_DUMMIES
+                )
+            else:
+                final_res, selected_X, removed_terms = prune_insignificant_exog(
+                    y=y,
+                    X=X,
+                    order=order,
+                    country=country,
+                    alpha=SIGNIFICANCE_LEVEL,
+                    remove_only_exog=REMOVE_ONLY_EXOG,
+                    min_exog_terms=MIN_EXOG_TERMS
+                )
 
             summary_rows.append(
-                extract_model_summary(country, order, final_res, selected_X, removed_terms)
+                extract_model_summary(
+                    country=country,
+                    order=order,
+                    res=final_res,
+                    selected_X=selected_X,
+                    removed_terms=removed_terms,
+                    outlier_dates_used=outlier_dates_used
+                )
             )
 
             coef_rows.extend(
                 extract_coefficients(country, final_res)
             )
 
-            # Export residual diagnostics for Indonesia
-            if country == "Indonesia":
+            # Export residual diagnostics for Thailand and Indonesia
+            if country in ["Thailand", "Indonesia"]:
                 save_residuals_to_excel(final_res, country)
                 plot_residual_diagnostics(final_res, country)
-
-                # Optional: print residual autocorrelations numerically
-                resid = pd.Series(final_res.resid).dropna()
-                print("\nIndonesia residual autocorrelations:")
-                for lag in range(1, min(13, len(resid))):
-                    print(f"Lag {lag}: {resid.autocorr(lag=lag):.4f}")
 
         except Exception as e:
             print(f"[ERROR] {country}: {e}")
@@ -432,6 +564,7 @@ def main():
                 "n_selected_exog": None,
                 "selected_exog_terms": None,
                 "removed_terms": None,
+                "outlier_dates": None,
                 "const": None,
                 "aic": None,
                 "bic": None,
