@@ -31,7 +31,7 @@ COUNTRIES = ["Thailand", "Philippines", "Korea", "Indonesia"]
 # FINAL ARMAX STRUCTURE
 # ----------------------------------------------------------------
 MODEL_SPEC = {
-    "Thailand": (1, 0, 1),
+    "Thailand": (2, 0, 1),
     "Philippines": (1, 0, 1),
     "Korea": (1, 0, 0),
     "Indonesia": (2, 0, 1)
